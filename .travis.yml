@@ -1,0 +1,44 @@
+sudo: required
+
+services:
+- docker
+
+branches:
+  only:
+  - master
+
+env:
+  global:
+  - REGISTRY: registry.blackwoodseven.com
+  - IMAGENAME: "$REGISTRY/$TRAVIS_REPO_SLUG"
+  - TAG_VERSION: "$TRAVIS_BRANCH.$TRAVIS_BUILD_NUMBER"
+  - TAG_LATEST: latest
+  - secure: e0vZFmLVhIdxd2qdMj64s7WP5c0+F/AcfqJASDdVTss8r71g8XwCKFJsGqHqg6gEs9qZQYuzGFbJzdgrGy4m8/k9DzB+o4WT+tqjdt/8uuyAKlDA1yNrbPywwfiUGnwG9kjQdLhXCTDYX9WyAHcxMBJ2knuiAutTrALjpTs3/nH4kHkq4drWpzlqpkoWrTwl/DH924I6mLK8QEjy6/glyBYGhTKlk7UUxLPwQtL9AbMDaFuP4vqeegrgs0cIRPyUW6O1qiTfy5eKtyoyIRd7BdQFY1QeYc+YqKy2+L2boaV6K06GWV7W0eIoadHvyJSCmiuAaB0xoYHaiVZ/Lv2b9FDSz7Hkq+QHMeiaeEpH9cTRekaqZ0oGwOoAyyAqIzS7Cbl+TJK5qOVTwHm1eYWRmY+/40n1fngmctaOv7kQUYl0Xyt8NpFC4Afe3FhuzDaXCHkcmMp9gJf710VpuAh00I+TKPXZS++UOn7Z/nUU6t2g/SIs2Ivr+PwvRTLrHnGGrkQfdCAF1GtVozj81FkVE6SpA8lAGEGiXhAR5SgpLFSecBPeCmc7i6Ve/yWu/Oi3CSrLpe6HAbYEbkpO1zpJb/zO+zgPI9dYgFEBQJIjfji1FjzR6sL0tXAkqIXdEwUMV7GY+a/jCD5cxDoOEuU9GCHGJ+GFuhxPDz+sP8dRyLM=
+
+before_script:
+- docker login -u travis -p "$REGISTRY_PASSWORD" $REGISTRY
+- echo "LABEL GIT_COMMIT=$TRAVIS_COMMIT" >> Dockerfile
+- echo "LABEL TAG_VERSION=$TAG_VERSION" >> Dockerfile
+
+script:
+- >
+  docker --version &&
+  docker-compose --version &&
+  make test compile &&
+  docker build -t $IMAGENAME:$TAG_VERSION -t $IMAGENAME:$TAG_LATEST . &&
+  docker push $IMAGENAME:$TAG_VERSION &&
+  docker push $IMAGENAME:$TAG_LATEST
+
+after_success:
+- >
+  git config --global user.email "tech@blackwoodseven.com" &&
+  git config --global user.name "Travis CI" &&
+  git tag -f $TAG_VERSION $TRAVIS_COMMIT &&
+  git push --tags
+
+after_failure:
+- echo failed
+
+notifications:
+  slack:
+    secure: k6iHRiukdNVv4TGulkuMleMGysMgMv6FJV9FDg4AetFkvGFTLqzHCwekJFIFDa09vJN8/rqL2ftYYmWVOcPk6xKLgoBhtG+wnuQ7nn4gRYIjgq84942v8Gfq2R71yqIGuyUnuAJJV2YGacEQd2WoYLW+T9TyOdxbthIBPUyMB0dYl+cvwABtlHCeBh1fUSbfyn1huksJGgpN4hPoBXCWqCVYkF8+LLXeYCwcfuDdvPA9S0XLZwf+s2pDhi0nN/KRZc1MbrWN6X8xqhvJyRo7DjEEkXGEeHHK0N/dPqy9s4/8E7/aaig/kEvYYECbYZowXG3DpBbnwSUTGZ8XxfVDoihMElAG3rfOvxoTprQfJCtfuAF1yQkoh+aMCkhb9CqC+oEcL+FYAkOUZR0sud7at8MAT4BKFP5rSYOsinHq3a6PZEUiK5aAhS2SUuZuHfprZ0gryNQru5OwW9OSVl+Ead1XDmaz/griD+v/nqyoUt3AN3gH7xZtAuNlFKHw+OJZuS7rhTFHQbrNIWxLG4MFgHd1+t/uAGajIP6dtVm8oq35XkF/1y9A4cvCqIAT+p1f6tOAWq52xd8dAQP0ldXIC7ZljRUGW764ov1Ifq0/o4q1dN++frcbGIICeJ0c017BL975el5Z90jYvinIsS/qqMXott6PX/0uohE0ig+VTH0=
