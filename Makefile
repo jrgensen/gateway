@@ -27,6 +27,6 @@ fmt:
 	$(DOCKER) go fmt ./...
 
 run:
-	docker run -d --rm -p 80:80 --volume /var/run/docker.sock:/var/run/docker.sock -e HOSTNAME=local.pnorental.com -e DOCKER_PORT_PROXY=1 -e DOCKER_API_VERSION=1.38 --name $(NAME) $(REPO)
+	docker run -d -p 80:80 --volume /var/run/docker.sock:/var/run/docker.sock --restart always -e HOSTNAME=local.pnorental.com -e DESTINATION_RESOLVER=docker -e DOCKER_API_VERSION=1.38 --name $(NAME) $(REPO)
 
 .PHONY: compile build watch dependencies test init

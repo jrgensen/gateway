@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -9,59 +8,21 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
-	"strconv"
 	"strings"
 )
 
+type DestinationResolver interface {
+	GetDestinationHostPort(srcHostPort string) (dstHostPort string, err error)
+}
+
 type ProxyServer struct {
-	proxyOnlyMappedHosts bool
-	proxyMappings        map[string]string
-	defaultDestination   string
+	destinationResolver DestinationResolver
 }
 
-func (s *ProxyServer) SetProxyOnlyMappedHosts(onlyMapped bool) {
-	s.proxyOnlyMappedHosts = onlyMapped
-}
-func (s *ProxyServer) SetProxyDefaultHost(defaultHost string) {
-	s.defaultDestination = defaultHost
-}
-func (s *ProxyServer) splitHostHostPort(str string) (srcHost string, dstHost string, dstPort int, err error) {
-	hhp := strings.Split(str, ":")
-
-	port, _ := strconv.Atoi(hhp[len(hhp)-1])
-	if port == 0 {
-		port = 80
-		hhp = append(hhp, "80")
-	}
-	if len(hhp) > 3 {
-		return "", "", -1, errors.New("Wrong format '%s' expected [srchost:]dsthost[:destport]")
-	}
-	if len(hhp) == 2 {
-		hhp = []string{hhp[0], hhp[0], hhp[1]}
-	}
-	return hhp[0], hhp[1], port, nil
+func (s *ProxyServer) SetDestinationResolver(dstRes DestinationResolver) {
+	s.destinationResolver = dstRes
 }
 
-func (s *ProxyServer) SetProxyMappings(mappings []string) {
-	s.proxyMappings = make(map[string]string)
-	for _, hostport := range mappings {
-		src, dst, port, err := s.splitHostHostPort(hostport)
-		if err != nil {
-			log.Fatal(fmt.Sprintf("Error parsing proxy mapping: %s - %v", hostport, err))
-		}
-		s.proxyMappings[src] = fmt.Sprintf("%s:%d", dst, port)
-	}
-}
-
-func (s *ProxyServer) GetDestinationHostPort(srcHost string) (dstHostPort string, err error) {
-	if dstHostPort, ok := s.proxyMappings[srcHost]; ok {
-		return dstHostPort, nil
-	}
-	if s.proxyOnlyMappedHosts {
-		return "", errors.New(fmt.Sprintf("Only configured gateways allowed ('%s' not found)", srcHost))
-	}
-	return fmt.Sprintf("%s:%d", srcHost, 80), nil
-}
 func (s *ProxyServer) Websocket(target string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		d, err := net.Dial("tcp", target)
@@ -113,8 +74,7 @@ func (s *ProxyServer) IsWebsocket(req *http.Request) bool {
 }
 
 func (s *ProxyServer) Handler(w http.ResponseWriter, r *http.Request) {
-	srcHost := strings.Split(r.Host, ".")[0]
-	dstHostPort, err := s.GetDestinationHostPort(srcHost)
+	dstHostPort, err := s.destinationResolver.GetDestinationHostPort(r.Host)
 	if err != nil {
 
 		http.Error(w, err.Error(), 502)

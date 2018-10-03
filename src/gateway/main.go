@@ -42,21 +42,21 @@ func main() {
 
 	http.HandleFunc(fmt.Sprintf("%s/", *ihost), hello)
 
-	dpp, _ := strconv.ParseBool(os.Getenv("DOCKER_PORT_PROXY"))
-	if dpp {
-		docker := &Docker{}
-		docker.SetApiVersion(dockerApiVersion)
+	ps := &ProxyServer{}
+	if os.Getenv("DESTINATION_RESOLVER") == "docker" {
+		docker := NewDockerResolver(dockerApiVersion)
 		docker.SetBaseHostname(hostname)
 		docker.SetGatewayIp(*hostip)
 		docker.FetchPortMappings()
-		http.HandleFunc("/", docker.Handler)
+		ps.SetDestinationResolver(docker)
 	} else {
-		ps := &ProxyServer{}
-		ps.SetProxyMappings(strings.Fields(os.Getenv("PROXY_MAPPINGS")))
-		ps.SetProxyOnlyMappedHosts(*onlyMapped)
-		ps.SetProxyDefaultHost(*defaultHost)
-		http.HandleFunc("/", ps.Handler)
+		priv := &ResolverPrivNet{}
+		priv.SetProxyMappings(strings.Fields(os.Getenv("PROXY_MAPPINGS")))
+		priv.SetProxyOnlyMappedHosts(*onlyMapped)
+		priv.SetProxyDefaultHost(*defaultHost)
+		ps.SetDestinationResolver(priv)
 	}
+	http.HandleFunc("/", ps.Handler)
 
 	fmt.Println("starting proxy on port", *port)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))
