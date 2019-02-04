@@ -1,0 +1,30 @@
+version: '3.2'
+
+volumes:
+    go-data:
+
+services:
+    build:
+        image: golang:1.11
+        command: ["./init.sh"]
+        working_dir: /app
+        volumes:
+        - ".:/app"
+        - go-data:/go
+        - /var/run/docker.sock:/var/run/docker.sock
+        environment:
+            DESTINATION_RESOLVER: docker
+            PORT_INSPECTOR: 8000
+            PROXY_MAPPINGS: >
+                driver-app-api:api
+                driver:api
+                nats:nats-streaming-console:8282
+                redis:redis-commander:8081
+                web:test
+                i:build:8000
+                web80:test:80
+        ports:
+        - 80
+
+    test:
+        image: nginxdemos/hello

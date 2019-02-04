@@ -1,26 +1,38 @@
 package main
 
 import (
+	"./resolver"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"os"
 	"strings"
 )
 
-type DestinationResolver interface {
-	GetDestinationHostPort(srcHostPort string) (dstHostPort string, err error)
-}
-
 type ProxyServer struct {
-	destinationResolver DestinationResolver
+	destinationResolver  resolver.DestinationResolver
+	destinationResolvers map[string]resolver.DestinationResolver
 }
 
-func (s *ProxyServer) SetDestinationResolver(dstRes DestinationResolver) {
-	s.destinationResolver = dstRes
+func (s *ProxyServer) AddDestinationResolvers(dstRes ...resolver.DestinationResolver) {
+	if s.destinationResolvers == nil {
+		s.destinationResolvers = make(map[string]resolver.DestinationResolver)
+	}
+	for _, resolver := range dstRes {
+		s.destinationResolvers[resolver.GetName()] = resolver
+	}
+}
+func (s *ProxyServer) SetActiveDestinationResolver(name string) {
+	if resolver, ok := s.destinationResolvers[name]; ok {
+		resolver.Configure()
+		s.destinationResolver = resolver
+		fmt.Printf("using destination resolver '%s'\n", resolver.GetName())
+		return
+	}
+	exitWithError(errors.New(fmt.Sprintf("Unknown destination resolver '%s'", name)))
 }
 
 func (s *ProxyServer) Websocket(target string) http.Handler {
@@ -95,20 +107,21 @@ func (s *ProxyServer) Handler(w http.ResponseWriter, r *http.Request) {
 			req.URL.Scheme = "http"
 		},
 	}
-	loggingRW := &loggingResponseWriter{
-		ResponseWriter: w,
-	}
+	handler.ServeHTTP(w, r)
+	//loggingRW := &loggingResponseWriter{
+	//	ResponseWriter: w,
+	//}
 	//h.ServeHTTP(loggingRW, r)
-	requestDump, err := httputil.DumpRequest(r, true)
-	handler.ServeHTTP(loggingRW, r)
-
-	if err != nil {
-		fmt.Println(err)
-	}
-	if os.Getenv("INSPECT_TRAFFIC") != "" {
+	//requestDump, err := httputil.DumpRequest(r, true)
+	//handler.ServeHTTP(loggingRW, r)
+	//
+	//	if err != nil {
+	//		fmt.Println(err)
+	//	}
+	/*if os.Getenv("INSPECT_TRAFFIC") != "" {
 		log.Println("#######################################################################")
 		log.Println(r.Method, r.URL.Path)
 		log.Println(string(requestDump))
 		log.Println("Status : ", loggingRW.status, "Header : ", loggingRW.Header(), "Response : ", string(loggingRW.body))
-	}
+	}*/
 }
