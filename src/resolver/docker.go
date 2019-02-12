@@ -44,10 +44,9 @@ func (d *Docker) Configure() {
 	if err != nil {
 		panic(err)
 	}
-	//conf, _ := d.client.ConfigList(context.Background(), types.ConfigListOptions{})
-	d.info, _ = d.client.Info(context.Background())
 
-	fmt.Printf("info: %+v\n", d.info.Swarm.ControlAvailable)
+	d.info, _ = d.client.Info(context.Background())
+	fmt.Printf("Swarm mode: %+v\n", d.info.Swarm.ControlAvailable)
 
 	d.fetchPortMappings()
 	go d.listenEvents()
@@ -97,34 +96,44 @@ func (d *Docker) listenEvents() {
 }
 
 func (d *Docker) fetchPortMappings() {
+	portMappings := make(map[string]uint16)
+
 	containers, err := d.client.ContainerList(context.Background(), types.ContainerListOptions{})
 	if err != nil {
-		panic(err)
+		log.Println(err)
+		return
 	}
-
-	d.portMappings = make(map[string]uint16)
 	for _, container := range containers {
 		for _, port := range container.Ports {
 			if port.PrivatePort == 80 && port.Type == "tcp" && port.PublicPort > 0 && port.PrivatePort != port.PublicPort {
 				for _, name := range container.Names {
-					//name = strings.Split(name, ".")[0]
 					for i := len(name); i > -1; i = strings.LastIndex(name, "_") {
 						name = name[0:i]
-						d.portMappings[name[1:]] = port.PublicPort
+						portMappings[name[1:]] = port.PublicPort
 					}
 				}
 			}
 		}
 	}
-	fmt.Println(d.portMappings)
 
 	services, err := d.client.ServiceList(context.Background(), types.ServiceListOptions{})
-	for _, service := range services {
-		fmt.Printf("endpoint: %+v\n", service.Endpoint)
-		//for _, port := range service.Endpoint.PortConfig {
-		//}
+	if err != nil {
+		log.Println(err)
+		return
 	}
-
+	for _, service := range services {
+		for _, port := range service.Endpoint.Ports {
+			if port.Protocol == "tcp" && port.TargetPort == 80 {
+				name := service.Spec.Name
+				for i := len(name); i > -1; i = strings.LastIndex(name, "_") {
+					name = name[0:i]
+					portMappings[name[0:]] = uint16(port.PublishedPort)
+				}
+			}
+		}
+	}
+	d.portMappings = portMappings
+	fmt.Println(d.portMappings)
 }
 
 func (d *Docker) GetDestinationHostPort(srcHostPort string) (dstHostPort string, err error) {
