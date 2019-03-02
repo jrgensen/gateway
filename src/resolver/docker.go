@@ -22,6 +22,7 @@ type Docker struct {
 	proxyOnlyMappedHosts bool
 	proxyMappings        map[string]string
 	portMappings         map[string]uint16
+	innerPorts           map[string]uint16
 	baseHostname         string
 	gatewayIp            string
 	client               *client.Client
@@ -37,7 +38,7 @@ func (d *Docker) Configure() {
 	flag.StringVar(&mappings, "proxy-mappings", "", "Manually specify mappings")
 	flag.Parse()
 
-	d.proxyMappings = d.parseProxyMappings(mappings)
+	d.proxyMappings, d.innerPorts = d.parseProxyMappings(mappings)
 
 	var err error
 	d.client, err = client.NewClientWithOpts(client.WithVersion("1.30")) //1.18
@@ -45,10 +46,7 @@ func (d *Docker) Configure() {
 		panic(err)
 	}
 
-	d.info, _ = d.client.Info(context.Background())
-	fmt.Printf("Swarm mode: %+v\n", d.info.Swarm.ControlAvailable)
-
-	d.fetchPortMappings()
+	d.fetchPorts()
 	go d.listenEvents()
 }
 
@@ -56,13 +54,14 @@ func (d *Docker) GetName() string {
 	return "docker"
 }
 
-func (d *Docker) parseProxyMappings(mappings string) map[string]string {
+func (d *Docker) parseProxyMappings(mappings string) (map[string]string, map[string]uint16) {
 	proxyMap := make(map[string]string)
+	innerPorts := make(map[string]uint16)
 	for _, mapping := range strings.Fields(mappings) {
 		hhp := strings.Split(mapping, ":")
 
 		if _, err := strconv.Atoi(hhp[len(hhp)-1]); err != nil {
-			hhp = append(hhp, "0")
+			hhp = append(hhp, "80")
 		}
 		if len(hhp) > 3 {
 			log.Printf("Wrong mapping format '%s' expected [srchost:]dsthost[:destport]", mapping)
@@ -72,8 +71,10 @@ func (d *Docker) parseProxyMappings(mappings string) map[string]string {
 			hhp = []string{hhp[0], hhp[0], hhp[1]}
 		}
 		proxyMap[hhp[0]] = fmt.Sprintf("%s:%s", hhp[1], hhp[2])
+		innerPort, _ := strconv.Atoi(hhp[2])
+		innerPorts[hhp[1]] = uint16(innerPort)
 	}
-	return proxyMap
+	return proxyMap, innerPorts
 }
 
 func (d *Docker) listenEvents() {
@@ -90,18 +91,18 @@ func (d *Docker) listenEvents() {
 			if e.Type == events.NetworkEventType {
 			}
 			fmt.Printf("Refreshing port mapping [%s]: ", e.Type)
-			d.fetchPortMappings()
+			d.fetchPorts()
 		}
 	}
 }
 
-func (d *Docker) fetchPortMappings() {
+func (d *Docker) fetchContainerPorts() map[string]uint16 {
 	portMappings := make(map[string]uint16)
 
 	containers, err := d.client.ContainerList(context.Background(), types.ContainerListOptions{})
 	if err != nil {
 		log.Println(err)
-		return
+		return portMappings
 	}
 	for _, container := range containers {
 		for _, port := range container.Ports {
@@ -115,24 +116,47 @@ func (d *Docker) fetchPortMappings() {
 			}
 		}
 	}
+	return portMappings
+}
+
+func (d *Docker) fetchServicePorts() map[string]uint16 {
+	portMappings := make(map[string]uint16)
 
 	services, err := d.client.ServiceList(context.Background(), types.ServiceListOptions{})
 	if err != nil {
 		log.Println(err)
-		return
+		return portMappings
 	}
 	for _, service := range services {
 		for _, port := range service.Endpoint.Ports {
-			if port.Protocol == "tcp" && port.TargetPort == 80 {
-				name := service.Spec.Name
-				for i := len(name); i > -1; i = strings.LastIndex(name, "_") {
-					name = name[0:i]
-					portMappings[name[0:]] = uint16(port.PublishedPort)
+			name := service.Spec.Name
+			for i := len(name); i > -1; i = strings.LastIndex(name, "_") {
+				name = name[0:i]
+				targetPort := uint32(80)
+				if p, ok := d.innerPorts[name]; ok {
+					targetPort = uint32(p)
+				}
+				if port.Protocol == "tcp" && port.TargetPort == targetPort {
+					portMappings[name] = uint16(port.PublishedPort)
 				}
 			}
 		}
 	}
-	d.portMappings = portMappings
+	return portMappings
+}
+
+func (d *Docker) fetchPorts() {
+	info, _ := d.client.Info(context.Background())
+	fmt.Printf("Swarm mode: %+v\n", info.Swarm.ControlAvailable)
+
+	ports := d.fetchContainerPorts()
+	if info.Swarm.ControlAvailable {
+		for k, v := range d.fetchServicePorts() {
+			ports[k] = v
+		}
+	}
+
+	d.portMappings = ports
 	fmt.Println(d.portMappings)
 }
 
