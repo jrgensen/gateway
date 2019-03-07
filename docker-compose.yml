@@ -13,18 +13,21 @@ services:
         - go-data:/go
         - /var/run/docker.sock:/var/run/docker.sock
         environment:
-            DESTINATION_RESOLVER: docker
-            PORT_INSPECTOR: 8000
+#            DESTINATION_RESOLVER: docker
+#            PORT_INSPECTOR: 8000
+            HTTPS: 1
             PROXY_MAPPINGS: >
                 driver-app-api:api
                 driver:api
                 nats:nats-streaming-console:8282
                 redis:redis-commander:8081
+                mowe.pnorental.com:test
                 web:test
                 i:build:8000
                 web80:test:80
         ports:
-        - 80
+        - 80:80
+        - 443:443
 
     test:
         image: nginxdemos/hello

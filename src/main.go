@@ -4,10 +4,15 @@ import (
 	"fmt"
 	"log"
 	//"net"
+	"context"
+	"crypto/tls"
+	"errors"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/namsral/flag"
+	"golang.org/x/crypto/acme/autocert"
 
 	"./resolver"
 )
@@ -21,10 +26,17 @@ func main() {
 		portProxy     int64
 		portInspector int64
 		resolverName  string
+		https         bool
 	)
+	HOSTS := make(map[string]string, 0)
+	for _, mapping := range strings.Fields(getEnv("PROXY_MAPPINGS", "")) {
+		hhp := strings.Split(mapping, ":")
+		HOSTS[hhp[0]] = mapping
+	}
 	flag.Int64Var(&portProxy, "port", 80, "Port gateway proxy will be listening on")
 	flag.Int64Var(&portInspector, "port-inspector", 0, "Port gateway inspector will be listening on")
 	flag.StringVar(&resolverName, "destination-resolver", "subnet", "The destination resolver to use (subnet, docker)")
+	flag.BoolVar(&https, "https", false, "Redirect all mapped hosts to https")
 
 	ps := &ProxyServer{}
 	ps.AddDestinationResolvers(
@@ -39,37 +51,31 @@ func main() {
 	if portInspector != 0 {
 		handler = wrapHandler(handler, portInspector)
 	}
+	if https {
+		m := autocert.Manager{
+			Cache:  autocert.DirCache("/app/certs"),
+			Prompt: autocert.AcceptTOS,
+			HostPolicy: func(ctx context.Context, host string) error {
+				if _, ok := HOSTS[host]; ok {
+					return nil
+				}
+				return errors.New("Unkown host(" + host + ")")
+			},
+		}
+		s := &http.Server{
+			Addr:      ":https",
+			TLSConfig: &tls.Config{GetCertificate: m.GetCertificate},
+			Handler:   http.HandlerFunc(handler),
+		}
+		go (func() {
+			log.Fatal(s.ListenAndServeTLS("", ""))
+		})()
+		handler = m.HTTPHandler(nil).ServeHTTP
+	}
 	http.HandleFunc("/", handler)
 
 	fmt.Println("gatway proxy listening on port", portProxy)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", portProxy), nil))
-}
-
-func attic() {
-	//resolver.GetHostIp()
-	//hostname := os.Getenv("HOSTNAME")
-	//httpPort, _ := strconv.ParseInt(getEnv("HTTP_PORT", "80"), 10, 0)
-	//port := flag.Int64("port", httpPort, "Listening on port")
-	//defaultHostEnv := getEnv("PROXY_DEFAULT_HOST", "")
-	//defaultHost := flag.String("default", defaultHostEnv, "The service being proxied if base address is used.")
-
-	//ihost := flag.String("host", "localhost", "inspection host")
-	//hostip := flag.String("hostip", "localhost", "ip address of gateway")
-
-	/*
-		if os.Getenv("DESTINATION_RESOLVER") == "docker" {
-			docker := resolver.NewDockerResolver()
-			docker.SetBaseHostname(hostname)
-			docker.SetGatewayIp(*hostip)
-			docker.FetchPortMappings()
-			ps.SetDestinationResolver(docker)
-		} else {
-			priv := &resolver.Subnet{}
-			priv.SetProxyDefaultHost(*defaultHost)
-			ps.SetDestinationResolver(priv)
-		}
-	*/
-	//http.HandleFunc(fmt.Sprintf("%s/", *ihost), wrapHandler(hello))
 }
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
