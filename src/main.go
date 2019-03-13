@@ -1,12 +1,12 @@
 package main
 
 import (
-	"fmt"
-	"log"
-	//"net"
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -21,6 +21,7 @@ func exitWithError(err error) {
 	fmt.Printf("%v\n", err)
 	os.Exit(1)
 }
+
 func main() {
 	var (
 		portProxy     int64
@@ -32,6 +33,10 @@ func main() {
 	for _, mapping := range strings.Fields(getEnv("PROXY_MAPPINGS", "")) {
 		hhp := strings.Split(mapping, ":")
 		HOSTS[hhp[0]] = mapping
+	}
+	httpHosts := make(map[string]string, 0)
+	for _, host := range strings.Fields(getEnv("HTTP", "")) {
+		httpHosts[host] = host
 	}
 	flag.Int64Var(&portProxy, "port", 80, "Port gateway proxy will be listening on")
 	flag.Int64Var(&portInspector, "port-inspector", 0, "Port gateway inspector will be listening on")
@@ -51,6 +56,7 @@ func main() {
 	if portInspector != 0 {
 		handler = wrapHandler(handler, portInspector)
 	}
+	defaultHandler := handler
 	if https {
 		m := autocert.Manager{
 			Cache:  autocert.DirCache("/app/certs"),
@@ -70,13 +76,47 @@ func main() {
 		go (func() {
 			log.Fatal(s.ListenAndServeTLS("", ""))
 		})()
-		handler = m.HTTPHandler(nil).ServeHTTP
+		handler = m.HTTPHandler(wrapRedirect(httpHosts, defaultHandler)).ServeHTTP
 	}
+	// http.HandleFunc (path, func redirect(w http.ResponseWriter, r *http.Request))
+	// func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request)
+
+	// type Handler interface {
+	//    ServeHTTP(ResponseWriter, *Request)
+	//}
+
+	// func ListenAndServe(addr string, handler Handler) error
+
 	http.HandleFunc("/", handler)
 
 	fmt.Println("gatway proxy listening on port", portProxy)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", portProxy), nil))
 }
+func stripPort(hostport string) string {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return hostport
+	}
+	return host
+}
+
+func wrapRedirect(hosts map[string]string, h http.HandlerFunc) http.Handler {
+	fmt.Println("wrapping")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("%#v [%#v]", hosts, r.URL)
+		if _, ok := hosts[stripPort(r.Host)]; ok {
+			fmt.Println("FOUND")
+			h(w, r)
+			return
+		}
+		if r.Method != "GET" && r.Method != "HEAD" {
+			http.Error(w, "Use HTTPS", http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, r, "https://"+stripPort(r.Host)+r.URL.RequestURI(), http.StatusFound)
+	})
+}
+
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
