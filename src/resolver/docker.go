@@ -12,7 +12,7 @@ import (
 
 	"io"
 	"log"
-	"net"
+	//"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -106,11 +106,11 @@ func (d *Docker) fetchContainerPorts() map[string]uint16 {
 	}
 	for _, container := range containers {
 		for _, port := range container.Ports {
-			if port.PrivatePort == 80 && port.Type == "tcp" && port.PublicPort > 0 && port.PrivatePort != port.PublicPort {
+			if port.Type == "tcp" && port.PublicPort > 0 {
 				for _, name := range container.Names {
 					for i := len(name); i > -1; i = strings.LastIndex(name, "_") {
 						name = name[0:i]
-						portMappings[name[1:]] = port.PublicPort
+						portMappings[fmt.Sprintf("%s:%d", name[1:], port.PrivatePort)] = port.PublicPort
 					}
 				}
 			}
@@ -132,12 +132,8 @@ func (d *Docker) fetchServicePorts() map[string]uint16 {
 			name := service.Spec.Name
 			for i := len(name); i > -1; i = strings.LastIndex(name, "_") {
 				name = name[0:i]
-				targetPort := uint32(80)
-				if p, ok := d.innerPorts[name]; ok {
-					targetPort = uint32(p)
-				}
-				if port.Protocol == "tcp" && port.TargetPort == targetPort {
-					portMappings[name] = uint16(port.PublishedPort)
+				if port.Protocol == "tcp" {
+					portMappings[fmt.Sprintf("%s:%d", name, port.TargetPort)] = uint16(port.PublishedPort)
 				}
 			}
 		}
@@ -162,37 +158,34 @@ func (d *Docker) fetchPorts() {
 
 func (d *Docker) GetDestinationHostPort(srcHostPort string) (dstHostPort string, err error) {
 	srcHost := strings.Split(srcHostPort, ":")[0]
+	dstHost := d.gatewayIp
 	fmt.Printf("Key: [%s]\n", srcHost)
+
 	if dstHostPort, ok := d.proxyMappings[srcHost]; ok {
-		dstHost, dstPort, _ := net.SplitHostPort(dstHostPort)
-		if dstPort != "0" {
-			return dstHostPort, nil
-		}
-		if dstPort, ok := d.portMappings[dstHost]; ok {
+		if dstPort, ok := d.portMappings[dstHostPort]; ok {
 			return fmt.Sprintf("%s:%d", dstHost, dstPort), nil
 		}
 		return "", errors.New(fmt.Sprintf("No destination Found for host '%s' (%s)", srcHost, dstHost))
 	}
 
-	srcHost = regexp.MustCompile("([^\\.]+)\\.local\\.").FindStringSubmatch(srcHost)[1]
-	fmt.Printf("Key: [%s]\n", srcHost)
-	if dstHostPort, ok := d.proxyMappings[srcHost]; ok {
-		dstHost, dstPort, _ := net.SplitHostPort(dstHostPort)
-		if dstPort != "0" {
-			return dstHostPort, nil
+	srcHostLevels := regexp.MustCompile("([^\\.]+)\\.(local|dev|build|test|stage|preprod|prod)\\.").FindStringSubmatch(srcHost)
+	if len(srcHostLevels) > 1 {
+		srcHost = srcHostLevels[1]
+		fmt.Printf("Key: [%s]\n", srcHost)
+		if dstHostPort, ok := d.proxyMappings[srcHost]; ok {
+			if dstPort, ok := d.portMappings[dstHostPort]; ok {
+				return fmt.Sprintf("%s:%d", dstHost, dstPort), nil
+			}
+			return "", errors.New(fmt.Sprintf("No destination Found for host '%s' (%s)", srcHost, dstHost))
 		}
-		if dstPort, ok := d.portMappings[dstHost]; ok {
-			return fmt.Sprintf("%s:%d", dstHost, dstPort), nil
-		}
-		return "", errors.New(fmt.Sprintf("No destination Found for host '%s' (%s)", srcHost, dstHost))
 	}
 
 	if d.proxyOnlyMappedHosts {
 		return "", errors.New(fmt.Sprintf("Only configured gateways allowed ('%s' not found)", srcHost))
 	}
 
-	dstHost := srcHost
-	if dstPort, ok := d.portMappings[dstHost]; ok {
+	dstHostPort = fmt.Sprintf("%s:%d", srcHost, 80)
+	if dstPort, ok := d.portMappings[dstHostPort]; ok {
 		return fmt.Sprintf("%s:%d", dstHost, dstPort), nil
 	}
 	return "", errors.New(fmt.Sprintf("No destination Found for host '%s' (%s)", srcHost, dstHost))
