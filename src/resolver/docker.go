@@ -172,7 +172,6 @@ func (d *Docker) GetDestinationHostPort(srcHostPort string) (dstHostPort string,
 	}
 
 	srcHostLevels := regexp.MustCompile(d.stackSearchString).FindStringSubmatch(srcHost)
-	fmt.Printf("%s %#v", d.stackSearchString, srcHostLevels)
 	if len(srcHostLevels) > 1 {
 		srcHost = srcHostLevels[1]
 		if dstHostPort, ok := d.proxyMappings[srcHost]; ok {
