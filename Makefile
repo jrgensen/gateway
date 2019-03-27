@@ -1,14 +1,14 @@
 NAME=gateway
 REPO=jrgensen/$(NAME)
 WORKDIR=/go/src/$(NAME)
-DOCKER=docker run --rm -ti -v `pwd`/src:/go/src/$(NAME) -w $(WORKDIR) --env CGO_ENABLED=0 golang:1.10
+DOCKER=docker run --rm -ti -v `pwd`/src:/go/src/$(NAME) -w $(WORKDIR) --env CGO_ENABLED=0 golang:1.12
 
 compile:
 	$(DOCKER) go get -t ./...
 	$(DOCKER) go build -a -installsuffix cgo .
 
 build: 
-	docker build -t $(REPO) .
+	docker build -t $(REPO):docker .
 
 push:
 	docker push $(REPO)
