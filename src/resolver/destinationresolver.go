@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"syscall"
 )
@@ -18,6 +19,10 @@ func exitWithError(err error) {
 }
 
 func gatewayIp() string {
+	ips, _ := net.LookupIP("host.docker.internal")
+	if len(ips) > 0 {
+		return "host.docker.internal"
+	}
 	cli, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_UDP)
 	if err != nil {
 		exitWithError(err)
