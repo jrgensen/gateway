@@ -3,12 +3,21 @@ package resolver
 import "testing"
 
 func TestGetDestinationHostPort(t *testing.T) {
-	d := &Docker{gatewayIp: "gateway"}
+	d := &Docker{
+		gatewayIp:            "gateway",
+		proxyOnlyMappedHosts: false,
+		stackSearchString:    "([^\\.]+)\\.(local|dev|build|test|stage|preprod|prod)\\.",
+	}
 	d.proxyMappings, _ = d.parseProxyMappings("src:bob:80 abc:3000 web.site.com:web") //map[string]string{"bob": "5"} //  "src:dst:80 host:80 web.site.com:web",
 	d.portMappings = map[string]uint16{"bob:80": 5, "bob_stack_1:80": 5, "abc_stack:3000": 18, "abc_stack_1:3000": 18, "bob_stack:80": 5, "abc:3000": 18, "web:80": 42}
 
 	dstHostPort, err := d.GetDestinationHostPort("abc.bob.local.test.tld")
 	if dstHostPort != "gateway:5" {
+		t.Errorf("Source host should equal destination host and have default port, got: %s. (%#v)", dstHostPort, err)
+	}
+	d.proxyOnlyMappedHosts = true
+	dstHostPort, err = d.GetDestinationHostPort("abc.bob.local.test.tld")
+	if err == nil {
 		t.Errorf("Source host should equal destination host and have default port, got: %s. (%#v)", dstHostPort, err)
 	}
 

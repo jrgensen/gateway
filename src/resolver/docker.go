@@ -23,6 +23,7 @@ type Docker struct {
 	proxyMappings        map[string]string
 	portMappings         map[string]uint16
 	innerPorts           map[string]uint16
+	stackSearchString    string
 	baseHostname         string
 	gatewayIp            string
 	client               *client.Client
@@ -33,6 +34,7 @@ func (d *Docker) Configure() {
 	flag.BoolVar(&d.proxyOnlyMappedHosts, "proxy-only-mapped-hosts", false, "Only hosts specified in proxy mapping will be proxied")
 	flag.StringVar(&d.baseHostname, "base-hostname", "", "Proxy key is first subdomaine to base host")
 	flag.StringVar(&d.gatewayIp, "gateway-ip", gatewayIp(), "Specify gateway ip")
+	flag.StringVar(&d.stackSearchString, "stack-search-string", "([^\\.]+)\\.(local|dev|build|test|stage|preprod|prod)\\.", "How to identify a stack from hostname")
 
 	var mappings string
 	flag.StringVar(&mappings, "proxy-mappings", "", "Manually specify mappings")
@@ -48,6 +50,7 @@ func (d *Docker) Configure() {
 
 	d.fetchPorts()
 	go d.listenEvents()
+	log.Printf("%#v\n", d)
 }
 
 func (d *Docker) GetName() string {
@@ -165,18 +168,18 @@ func (d *Docker) GetDestinationHostPort(srcHostPort string) (dstHostPort string,
 		if dstPort, ok := d.portMappings[dstHostPort]; ok {
 			return fmt.Sprintf("%s:%d", dstHost, dstPort), nil
 		}
-		return "", errors.New(fmt.Sprintf("No destination Found for host '%s' (%s)", srcHost, dstHost))
+		return "", errors.New(fmt.Sprintf("No destination found for host '%s' (%s)", srcHost, dstHostPort))
 	}
 
-	srcHostLevels := regexp.MustCompile("([^\\.]+)\\.(local|dev|build|test|stage|preprod|prod)\\.").FindStringSubmatch(srcHost)
+	srcHostLevels := regexp.MustCompile(d.stackSearchString).FindStringSubmatch(srcHost)
+	fmt.Printf("%s %#v", d.stackSearchString, srcHostLevels)
 	if len(srcHostLevels) > 1 {
 		srcHost = srcHostLevels[1]
-		fmt.Printf("Key: [%s]\n", srcHost)
 		if dstHostPort, ok := d.proxyMappings[srcHost]; ok {
 			if dstPort, ok := d.portMappings[dstHostPort]; ok {
 				return fmt.Sprintf("%s:%d", dstHost, dstPort), nil
 			}
-			return "", errors.New(fmt.Sprintf("No destination Found for host '%s' (%s)", srcHost, dstHost))
+			return "", errors.New(fmt.Sprintf("No destination found for stack name '%s' (%s)", srcHost, dstHost))
 		}
 	}
 
@@ -188,5 +191,5 @@ func (d *Docker) GetDestinationHostPort(srcHostPort string) (dstHostPort string,
 	if dstPort, ok := d.portMappings[dstHostPort]; ok {
 		return fmt.Sprintf("%s:%d", dstHost, dstPort), nil
 	}
-	return "", errors.New(fmt.Sprintf("No destination Found for host '%s' (%s)", srcHost, dstHost))
+	return "", errors.New(fmt.Sprintf("No destination, exhausted all methods '%s' (%s)", srcHost, dstHostPort))
 }
