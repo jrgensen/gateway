@@ -6,12 +6,14 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/namsral/flag"
 	"golang.org/x/net/context"
 
 	"io"
 	"log"
+
 	//"net"
 	"regexp"
 	"strconv"
@@ -81,7 +83,13 @@ func (d *Docker) parseProxyMappings(mappings string) (map[string]string, map[str
 }
 
 func (d *Docker) listenEvents() {
-	messages, errs := d.client.Events(context.Background(), types.EventsOptions{})
+	filters := filters.NewArgs()
+	// Include specific event types
+	filters.Add("type", events.ContainerEventType)
+	filters.Add("type", events.NetworkEventType)
+	filters.Add("type", events.ServiceEventType)
+
+	messages, errs := d.client.Events(context.Background(), types.EventsOptions{Filters: filters})
 	fmt.Println("Listening for docker events:")
 	for {
 		select {
@@ -91,9 +99,15 @@ func (d *Docker) listenEvents() {
 			}
 			return
 		case e := <-messages:
-			if e.Type == events.NetworkEventType {
+			// Exclude specific actions
+			if e.Action == "health_status" {
+				break
 			}
-			fmt.Printf("Refreshing port mapping [%s]: ", e.Type)
+			if strings.HasPrefix(e.Action, "exec_") {
+				break
+			}
+
+			fmt.Printf("Refreshing port mapping [%s] %s: ", e.Type, e.Action)
 			d.fetchPorts()
 		}
 	}
