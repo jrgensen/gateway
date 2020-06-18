@@ -3,22 +3,132 @@ package resolver
 import (
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
 	"github.com/namsral/flag"
 	"golang.org/x/net/context"
-
-	"io"
-	"log"
-
-	//"net"
-	"regexp"
-	"strconv"
-	"strings"
 )
+
+type Stack struct {
+	services    []swarm.Service
+	healthLabel string
+}
+
+func (s *Stack) CreatedAt() time.Time {
+	createdAt := time.Now()
+	for _, service := range s.services {
+		if createdAt.After(service.CreatedAt) {
+			createdAt = service.CreatedAt
+		}
+	}
+	return createdAt
+}
+func (s *Stack) Healthy() bool {
+	for _, service := range s.services {
+		if value, found := service.Spec.Labels[s.healthLabel]; found && value != "true" {
+			return false
+		}
+	}
+	return true
+}
+func (s *Stack) Ports() map[uint32]uint32 {
+	ports := map[uint32]uint32{}
+	for _, service := range s.services {
+		for _, port := range service.Endpoint.Ports {
+			if port.Protocol != "tcp" {
+				continue
+			}
+			ports[port.TargetPort] = port.PublishedPort
+		}
+	}
+	return ports
+}
+
+type Deployment struct {
+	stacks map[string]Stack
+}
+
+func (d *Deployment) ActiveStack() (activeStack *Stack) {
+	for _, stack := range d.stacks {
+		if !stack.Healthy() {
+			continue
+		}
+		if activeStack == nil {
+			activeStack = &stack
+			continue
+		}
+		if activeStack.CreatedAt().Before(stack.CreatedAt()) {
+			activeStack = &stack
+		}
+	}
+	return
+}
+func (d *Deployment) NewestStack() (newestStack *Stack) {
+	for _, stack := range d.stacks {
+		if newestStack == nil {
+			newestStack = &stack
+			continue
+		}
+		if newestStack.CreatedAt().Before(stack.CreatedAt()) {
+			newestStack = &stack
+		}
+	}
+	return
+}
+
+type Swarm struct {
+	deployments     map[string]Deployment
+	deploymentLabel string
+	healthLabel     string
+}
+
+func (s *Swarm) AddServices(services []swarm.Service) {
+	s.deployments = map[string]Deployment{}
+	for _, service := range services {
+		s.addService(service)
+	}
+}
+func (s *Swarm) Ports() map[string]uint16 {
+	ports := map[string]uint16{}
+	for name, deployment := range s.deployments {
+		stack := deployment.ActiveStack()
+		if stack == nil {
+			stack = deployment.NewestStack()
+		}
+		for targetPort, publishedPort := range stack.Ports() {
+			ports[fmt.Sprintf("%s:%d", name, targetPort)] = uint16(publishedPort)
+		}
+	}
+	return ports
+}
+
+func (s *Swarm) addService(service swarm.Service) {
+	deploymentName := strings.Split(service.Spec.Name, "_")[0]
+	if service.Spec.Labels[s.deploymentLabel] != "" {
+		deploymentName = service.Spec.Labels[s.deploymentLabel]
+	}
+	stackName := service.Spec.Labels["com.docker.stack.namespace"]
+
+	deployment := s.deployments[deploymentName]
+	if deployment.stacks == nil {
+		deployment.stacks = map[string]Stack{}
+	}
+	stack := deployment.stacks[stackName]
+	stack.services = append(stack.services, service)
+	stack.healthLabel = s.healthLabel
+	deployment.stacks[stackName] = stack
+	s.deployments[deploymentName] = deployment
+}
 
 type Docker struct {
 	proxyOnlyMappedHosts bool
@@ -30,6 +140,10 @@ type Docker struct {
 	gatewayIp            string
 	client               *client.Client
 	info                 types.Info
+
+	stackLabel  string
+	healthLabel string
+	swarm       Swarm
 }
 
 func (d *Docker) Configure() {
@@ -37,6 +151,8 @@ func (d *Docker) Configure() {
 	flag.StringVar(&d.baseHostname, "base-hostname", "", "Proxy key is first subdomaine to base host")
 	flag.StringVar(&d.gatewayIp, "gateway-ip", gatewayIp(), "Specify gateway ip")
 	flag.StringVar(&d.stackSearchString, "stack-search-string", "([^\\.]+)\\.(local|dev|build|test|stage|preprod|prod)\\.", "How to identify a stack from hostname")
+	flag.StringVar(&d.stackLabel, "docker-stack-label", "", "Name of label defining the stack")
+	flag.StringVar(&d.healthLabel, "docker-health-label", "", "Name of label specifing the service health")
 
 	var mappings string
 	flag.StringVar(&mappings, "proxy-mappings", "", "Manually specify mappings")
@@ -49,6 +165,7 @@ func (d *Docker) Configure() {
 	if err != nil {
 		panic(err)
 	}
+	d.swarm = Swarm{deploymentLabel: d.stackLabel, healthLabel: d.healthLabel}
 
 	d.fetchPorts()
 	go d.listenEvents()
@@ -122,8 +239,15 @@ func (d *Docker) fetchContainerPorts() map[string]uint16 {
 		return portMappings
 	}
 	for _, container := range containers {
+		if len(container.Labels) > 0 {
+			log.Printf("\n\nContainer labels:\n%#v\n\n", container.Labels)
+		}
 		for _, port := range container.Ports {
 			if port.Type == "tcp" && port.PublicPort > 0 {
+				if container.Labels["gateway.stack.name"] != "" {
+					portMappings[fmt.Sprintf("%s:%d", container.Labels["gateway.stack.name"], port.PrivatePort)] = port.PublicPort
+					continue
+				}
 				for _, name := range container.Names {
 					for i := len(name); i > -1; i = strings.LastIndex(name, "_") {
 						name = name[0:i]
@@ -137,25 +261,13 @@ func (d *Docker) fetchContainerPorts() map[string]uint16 {
 }
 
 func (d *Docker) fetchServicePorts() map[string]uint16 {
-	portMappings := make(map[string]uint16)
-
 	services, err := d.client.ServiceList(context.Background(), types.ServiceListOptions{})
 	if err != nil {
 		log.Println(err)
-		return portMappings
+		return map[string]uint16{}
 	}
-	for _, service := range services {
-		for _, port := range service.Endpoint.Ports {
-			name := service.Spec.Name
-			for i := len(name); i > -1; i = strings.LastIndex(name, "_") {
-				name = name[0:i]
-				if port.Protocol == "tcp" {
-					portMappings[fmt.Sprintf("%s:%d", name, port.TargetPort)] = uint16(port.PublishedPort)
-				}
-			}
-		}
-	}
-	return portMappings
+	d.swarm.AddServices(services)
+	return d.swarm.Ports()
 }
 
 func (d *Docker) fetchPorts() {
