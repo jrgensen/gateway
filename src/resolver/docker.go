@@ -35,12 +35,23 @@ func (s *Stack) CreatedAt() time.Time {
 }
 func (s *Stack) Healthy() bool {
 	for _, service := range s.services {
-		if value, found := service.Spec.Labels[s.healthLabel]; found && value != "true" {
+		if value, found := service.Spec.Labels[s.healthLabel]; !found || value != "true" {
 			return false
 		}
 	}
 	return true
 }
+func (s *Stack) Namespace(label string) string {
+	namespace := ""
+	for _, service := range s.services {
+		if name, found := service.Spec.Labels[label]; found {
+			return name
+		}
+		namespace = service.Spec.Labels["com.docker.stack.namespace"]
+	}
+	return namespace
+}
+
 func (s *Stack) Ports() map[uint32]uint32 {
 	ports := map[uint32]uint32{}
 	for _, service := range s.services {
@@ -93,9 +104,23 @@ type Swarm struct {
 }
 
 func (s *Swarm) AddServices(services []swarm.Service) {
-	s.deployments = map[string]Deployment{}
+	stacks := map[string]Stack{}
 	for _, service := range services {
-		s.addService(service)
+		stackName := service.Spec.Labels["com.docker.stack.namespace"]
+		stack := stacks[stackName]
+		stack.services = append(stack.services, service)
+		stacks[stackName] = stack
+	}
+	s.deployments = map[string]Deployment{}
+	for name, stack := range stacks {
+		stack.healthLabel = s.healthLabel
+		namespace := stack.Namespace(s.deploymentLabel)
+		deployment := s.deployments[namespace]
+		if deployment.stacks == nil {
+			deployment.stacks = map[string]Stack{}
+		}
+		deployment.stacks[name] = stack
+		s.deployments[namespace] = deployment
 	}
 }
 func (s *Swarm) Ports() map[string]uint16 {
@@ -110,24 +135,6 @@ func (s *Swarm) Ports() map[string]uint16 {
 		}
 	}
 	return ports
-}
-
-func (s *Swarm) addService(service swarm.Service) {
-	deploymentName := strings.Split(service.Spec.Name, "_")[0]
-	if service.Spec.Labels[s.deploymentLabel] != "" {
-		deploymentName = service.Spec.Labels[s.deploymentLabel]
-	}
-	stackName := service.Spec.Labels["com.docker.stack.namespace"]
-
-	deployment := s.deployments[deploymentName]
-	if deployment.stacks == nil {
-		deployment.stacks = map[string]Stack{}
-	}
-	stack := deployment.stacks[stackName]
-	stack.services = append(stack.services, service)
-	stack.healthLabel = s.healthLabel
-	deployment.stacks[stackName] = stack
-	s.deployments[deploymentName] = deployment
 }
 
 type Docker struct {
@@ -239,9 +246,6 @@ func (d *Docker) fetchContainerPorts() map[string]uint16 {
 		return portMappings
 	}
 	for _, container := range containers {
-		if len(container.Labels) > 0 {
-			log.Printf("\n\nContainer labels:\n%#v\n\n", container.Labels)
-		}
 		for _, port := range container.Ports {
 			if port.Type == "tcp" && port.PublicPort > 0 {
 				if container.Labels["gateway.stack.name"] != "" {
