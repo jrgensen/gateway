@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/namsral/flag"
 	"golang.org/x/crypto/acme/autocert"
 
@@ -105,13 +106,15 @@ func wrapRedirect(hosts map[string]string, h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%#v [%#v]", hosts, r.URL)
 		if _, ok := hosts[stripPort(r.Host)]; ok {
-			fmt.Println("FOUND")
 			h(w, r)
 			return
 		}
+
 		if r.Method != "GET" && r.Method != "HEAD" {
-			http.Error(w, "Use HTTPS", http.StatusBadRequest)
+			//http.Redirect(w, r, "https://"+stripPort(r.Host)+r.URL.RequestURI(), http.StatusTemporaryRedirect) //http.StatusFound)
+			http.Error(w, "Use HTTPS ("+r.Method+") '"+"https://"+stripPort(r.Host)+r.URL.RequestURI()+"'", http.StatusBadRequest)
 			return
+			spew.Dump(r)
 		}
 		http.Redirect(w, r, "https://"+stripPort(r.Host)+r.URL.RequestURI(), http.StatusFound)
 	})
